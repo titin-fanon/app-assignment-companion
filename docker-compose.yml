@@ -18,7 +18,7 @@ name: app-assignment-backend
 # locally built image instead of the published one:
 #
 #   IMAGE=app-assignment-backend IMAGE_TAG=dev docker compose up -d
-x-image: &image ${IMAGE:-ghcr.io/titin-fanon/app-assignment-backend}:${IMAGE_TAG:-1.0.0}
+x-image: &image ${IMAGE:-ghcr.io/titin-fanon/app-assignment-backend}:${IMAGE_TAG:-1.0.1}
 
 services:
   # ---------------------------------------------------------------------------
