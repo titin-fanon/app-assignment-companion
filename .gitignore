@@ -1,0 +1,6 @@
+# Allowlist: everything is ignored except the published files.
+*
+!.gitignore
+!.env.example
+!docker-compose.yml
+!README.md

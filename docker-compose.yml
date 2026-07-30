@@ -1,0 +1,102 @@
+# Two services, one image. `docker compose up -d` is the whole setup step.
+#
+#   api  -> http://localhost:3001   the comic REST API you build against
+#   mcp  -> http://localhost:3002   the API documentation, over MCP, for your
+#                                   coding agent (endpoint /mcp, health /healthz)
+#
+# Copy `.env.example` to `.env` if you want to change ports, log level, or inject
+# artificial latency. Every value below has a working default, so `.env` is
+# optional.
+#
+name: app-assignment-backend
+
+# Both services run the SAME image and differ only in which binary they start.
+# The anchor is here so the two `image:` lines cannot drift apart: an api and an
+# mcp from different tags would be a genuinely confusing bug to diagnose.
+#
+# Override either half from the environment or `.env`, which is how you run a
+# locally built image instead of the published one:
+#
+#   IMAGE=app-assignment-backend IMAGE_TAG=dev docker compose up -d
+x-image: &image ${IMAGE:-ghcr.io/titin-fanon/app-assignment-backend}:${IMAGE_TAG:-1.0.0}
+
+services:
+  # ---------------------------------------------------------------------------
+  # The REST API. This is the service your app talks to.
+  # ---------------------------------------------------------------------------
+  api:
+    image: *image
+    # The image's CMD is `/app/apid`, so this line is redundant for `api` and
+    # essential for `mcp` - it is written out here anyway so the two services
+    # read symmetrically and it is obvious that the only difference between them
+    # is the binary.
+    command: ["/app/apid"]
+    environment:
+      # The port INSIDE the container. Fixed at 3001 on purpose: the container
+      # healthcheck below is `apid` probing itself, and it reads this same
+      # variable, so pinning it keeps the probe correct no matter which host port
+      # you publish on. Change the host port via API_PORT in `.env` instead.
+      API_PORT: "3001"
+      DB_PATH: /app/data/app.db
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Artificial delay per data response, in milliseconds. GET /health is
+      # exempt, which is why a large value here does not flap the healthcheck.
+      LATENCY_MS: ${LATENCY_MS:-0}
+    # host:container. API_PORT from `.env` moves only the host side.
+    ports: ["${API_PORT:-3001}:3001"]
+    # The image ships a fully seeded app.db at /app/data/app.db. Docker copies
+    # the image's contents into a named volume the first time it creates that
+    # volume, so the database is present on first `up`, and any writes survive a
+    # plain `docker compose down`.
+    #
+    # Docker seeds a named volume ONLY at creation and never refreshes it.
+    # After pulling a new image, use `docker compose down -v` so the stale volume is removed and the new
+    # database can be seeded. Without `-v` the old data is silently kept.
+    volumes: ["appdb:/app/data"]
+    healthcheck:
+      # The image is distroless: no shell, no curl, no wget. `apid -healthcheck`
+      # is a second process inside the container that does GET /health on
+      # loopback and exits 0 only on HTTP 200 - a 503 "DB UNREACHABLE" counts as
+      # unhealthy. This binary-probe form is the only one that works here; a
+      # `CMD-SHELL` test would fail with "no such file or directory".
+      test: ["CMD", "/app/apid", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The documentation MCP server. Point your coding agent at
+  # http://localhost:3002/mcp - see the README for per-editor snippets.
+  # ---------------------------------------------------------------------------
+  mcp:
+    image: *image
+    # This is the whole reason the image uses CMD rather than ENTRYPOINT:
+    # Compose's `command:` REPLACES CMD. Appended to an ENTRYPOINT it would run
+    # `apid /app/mcpd`, which starts the API, ignores the extra argument, and
+    # logs a perfectly healthy-looking line while nothing serves MCP at all.
+    command: ["/app/mcpd"]
+    environment:
+      # Port inside the container, fixed for the same reason as API_PORT above.
+      MCP_PORT: "3002"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports: ["${MCP_PORT:-3002}:3002"]
+    # No volume, and no DB_PATH. `mcpd` serves the documentation corpus embedded
+    # in the binary and never opens a database - it links no SQLite driver at
+    # all. Leaving the mount off keeps that boundary visible in the deployment,
+    # not just in the source: if this service ever needed /app/data, something
+    # has quietly grown a database dependency.
+    healthcheck:
+      # GET /healthz, plain HTTP - deliberately not an MCP handshake, which would
+      # need exact Accept and Content-Type headers and a protocol version.
+      test: ["CMD", "/app/mcpd", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+volumes:
+  # Holds the API's SQLite database. Remove it with `docker compose down -v`.
+  appdb:
